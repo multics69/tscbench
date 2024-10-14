@@ -64,6 +64,7 @@ enum modes {
         MODE_NO_TSC = 1 << 4,
         MODE_RDTSC = 1 << 5,
         MODE_GETTIME = 1 << 6,
+	MODE_RDTSC_LFENCE = 1 << 7,
 };
 
 /* use a smaller subset for high IPC tests */
@@ -119,6 +120,13 @@ static inline unsigned long rdtscp(unsigned int *aux)
 	return ((unsigned long)edx) << 32 | eax;
 }
 
+static inline unsigned long rdtsc_lfence(unsigned int *aux)
+{
+	unsigned int eax, edx;
+	__asm__ __volatile__("lfence;rdtsc" : "=a"(eax), "=d"(edx), "=c"(*aux));
+	return ((unsigned long)edx) << 32 | eax;
+}
+
 static inline unsigned long rdtsc(unsigned int *aux)
 {
 	unsigned int eax, edx;
@@ -132,6 +140,8 @@ static __attribute__((noinline)) unsigned long read_tsc(unsigned int *aux)
                 return 0;
         if (run_mode & MODE_RDTSCP)
                 return rdtscp(aux);
+	if (run_mode & MODE_RDTSC_LFENCE)
+		return rdtsc_lfence(aux);
         if (run_mode & MODE_GETTIME) {
                 struct timespec tsc;
                 return clock_gettime(CLOCK_MONOTONIC, &tsc);
@@ -348,6 +358,10 @@ int main(int ac, char **av)
                         fprintf(stderr, "use rdtsc\n");
                         tsc_variant = "rdtsc";
                         run_mode |= MODE_RDTSC;
+                } else if (strcmp(str, "rdtsc_lfence") == 0) {
+                        fprintf(stderr, "use lfence;rdtsc\n");
+                        tsc_variant = "rdtsc_lfence";
+			run_mode |= MODE_RDTSC_LFENCE;
                 } else if (strcmp(str, "clock_gettime") == 0) {
                         fprintf(stderr, "use clock_gettime\n");
                         tsc_variant = "clock_gettime";
@@ -370,12 +384,13 @@ int main(int ac, char **av)
         }
 
         /* default to low_ipc if nothing was specified */
-        if (!(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC | MODE_RDTSC | MODE_RDTSCP | MODE_GETTIME))) {
+        if (!(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC | MODE_RDTSC |
+		MODE_RDTSC_LFENCE | MODE_RDTSCP | MODE_GETTIME))) {
                 run_mode |= MODE_LOW_IPC;
         }
 
         /* default to rdtscp if nothing was specified */
-        if (!(run_mode & (MODE_RDTSC | MODE_RDTSCP | MODE_GETTIME))) {
+        if (!(run_mode & (MODE_RDTSC | MODE_RDTSCP | MODE_RDTSC_LFENCE | MODE_GETTIME))) {
                 run_mode |= MODE_RDTSCP;
         }
 
@@ -433,7 +448,7 @@ int main(int ac, char **av)
 
                         fprintf(stderr, "ratio %.2f\n", calls / skip_calls);
                 }
-        } else if (run_mode & (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME)) {
+        } else if (run_mode & (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | MODE_RDTSC_LFENCE)) {
                 run_for_secs(runtime, read_tsc_thread, &td);
         }
 }
