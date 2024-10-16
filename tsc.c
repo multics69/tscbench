@@ -34,6 +34,9 @@
 #include <pthread.h>
 
 #define USEC_PER_SEC 1000000
+#ifndef CLOCK_NON_MONOTONIC
+#define CLOCK_NON_MONOTONIC            12
+#endif
 
 /* we want a large matrix to force cache misses */
 static unsigned long matrix_size = 64 * 1024 * 1024ULL;
@@ -65,6 +68,7 @@ enum modes {
         MODE_RDTSC = 1 << 5,
         MODE_GETTIME = 1 << 6,
 	MODE_RDTSC_LFENCE = 1 << 7,
+        MODE_GETTIME_NON_MONOTONIC = 1 << 8,
 };
 
 /* use a smaller subset for high IPC tests */
@@ -144,7 +148,21 @@ static __attribute__((noinline)) unsigned long read_tsc(unsigned int *aux)
 		return rdtsc_lfence(aux);
         if (run_mode & MODE_GETTIME) {
                 struct timespec tsc;
-                return clock_gettime(CLOCK_MONOTONIC, &tsc);
+		int ret = clock_gettime(CLOCK_MONOTONIC, &tsc);
+		if (ret < 0) {
+			fprintf(stderr, "clock_gettime failed: %d\n", ret);
+			exit(1);
+		}
+		return tsc.tv_sec * 1000000000ULL + tsc.tv_nsec;
+        }
+        if (run_mode & MODE_GETTIME_NON_MONOTONIC) {
+                struct timespec tsc;
+		int ret = clock_gettime(CLOCK_MONOTONIC, &tsc);
+		if (ret < 0) {
+			fprintf(stderr, "clock_gettime failed: %d\n", ret);
+			exit(1);
+		}
+		return tsc.tv_sec * 1000000000ULL + tsc.tv_nsec;
         }
         return rdtsc(aux);
 }
@@ -362,6 +380,10 @@ int main(int ac, char **av)
                         fprintf(stderr, "use lfence;rdtsc\n");
                         tsc_variant = "rdtsc_lfence";
 			run_mode |= MODE_RDTSC_LFENCE;
+                } else if (strcmp(str, "clock_gettime_non_monotonic") == 0) {
+                        fprintf(stderr, "use clock_gettime_non_monotonic\n");
+                        tsc_variant = "clock_gettime_non_monotonic";
+                        run_mode |= MODE_GETTIME_NON_MONOTONIC;
                 } else if (strcmp(str, "clock_gettime") == 0) {
                         fprintf(stderr, "use clock_gettime\n");
                         tsc_variant = "clock_gettime";
@@ -385,12 +407,16 @@ int main(int ac, char **av)
 
         /* default to low_ipc if nothing was specified */
         if (!(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC | MODE_RDTSC |
-		MODE_RDTSC_LFENCE | MODE_RDTSCP | MODE_GETTIME))) {
+		MODE_RDTSC_LFENCE | MODE_RDTSCP | MODE_GETTIME | MODE_GETTIME_NON_MONOTONIC))) {
                 run_mode |= MODE_LOW_IPC;
         }
+	/* comparison mode needs to be low_ipc or high_ipc */
+	if ((run_mode & MODE_CMP) && !(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC))) {
+		run_mode |= MODE_LOW_IPC;
+	}
 
         /* default to rdtscp if nothing was specified */
-        if (!(run_mode & (MODE_RDTSC | MODE_RDTSCP | MODE_RDTSC_LFENCE | MODE_GETTIME))) {
+        if (!(run_mode & (MODE_RDTSC | MODE_RDTSCP | MODE_RDTSC_LFENCE | MODE_GETTIME | MODE_GETTIME_NON_MONOTONIC))) {
                 run_mode |= MODE_RDTSCP;
         }
 
@@ -448,7 +474,7 @@ int main(int ac, char **av)
 
                         fprintf(stderr, "ratio %.2f\n", calls / skip_calls);
                 }
-        } else if (run_mode & (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | MODE_RDTSC_LFENCE)) {
+        } else if (run_mode & (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | MODE_RDTSC_LFENCE | MODE_GETTIME_NON_MONOTONIC)) {
                 run_for_secs(runtime, read_tsc_thread, &td);
         }
 }
