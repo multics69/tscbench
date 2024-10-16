@@ -48,7 +48,7 @@ static int runtime = 10;
 static int run_mode = 0;
 
 /*
- * possible valid modes
+ * example valid modes
  * low_ipc
  * low_ipc | cmp -- compares the low_ipc run with and without rdtscp reads
  * low_ipc | notsc -- just does a low_ipc run without tsc reads
@@ -62,14 +62,19 @@ static int run_mode = 0;
 enum modes {
         MODE_CMP = 1 << 0,
         MODE_LOW_IPC = 1 << 1,
-        MODE_RDTSCP = 1 << 2,
-        MODE_HIGH_IPC = 1 << 3,
-        MODE_NO_TSC = 1 << 4,
+        MODE_HIGH_IPC = 1 << 2,
+        MODE_NO_TSC = 1 << 3,
+        MODE_RDTSCP = 1 << 4,
         MODE_RDTSC = 1 << 5,
-        MODE_GETTIME = 1 << 6,
-	MODE_RDTSC_LFENCE = 1 << 7,
+	MODE_RDTSC_LFENCE = 1 << 6,
+        MODE_GETTIME = 1 << 7,
         MODE_GETTIME_NON_MONOTONIC = 1 << 8,
 };
+
+#define IPC_MODE_MASK (MODE_LOW_IPC | MODE_HIGH_IPC)
+#define TSC_MODE_MASK (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | \
+	MODE_NO_TSC | MODE_RDTSC_LFENCE | MODE_GETTIME_NON_MONOTONIC)
+#define CLOCK_MODE_MASK (TSC_MODE_MASK & ~MODE_NO_TSC)
 
 /* use a smaller subset for high IPC tests */
 static unsigned long high_ipc_matrix = 105;
@@ -157,7 +162,7 @@ static __attribute__((noinline)) unsigned long read_tsc(unsigned int *aux)
         }
         if (run_mode & MODE_GETTIME_NON_MONOTONIC) {
                 struct timespec tsc;
-		int ret = clock_gettime(CLOCK_MONOTONIC, &tsc);
+		int ret = clock_gettime(CLOCK_NON_MONOTONIC, &tsc);
 		if (ret < 0) {
 			fprintf(stderr, "clock_gettime failed: %d\n", ret);
 			exit(1);
@@ -350,16 +355,36 @@ void run_for_secs(int secs, thread_func func, struct thread_data *td)
         pthread_join(thread, NULL);
 }
 
+#if 0
+void test_clock_gettime(void)
+{
+        struct timespec tsc = { 0 };
+        struct timespec tsc2 = { 0 };
+	int ret;
+
+        ret = clock_gettime(CLOCK_MONOTONIC, &tsc);
+        if (ret < 0) {
+                fprintf(stderr, "clock_gettime failed: %d\n", ret);
+                exit(1);
+	}
+        ret = clock_gettime(CLOCK_NON_MONOTONIC, &tsc2);
+        if (ret < 0) {
+                fprintf(stderr, "clock_gettime failed: %d\n", ret);
+                exit(1);
+	}
+	fprintf(stderr, "testing clock_gettime\n");
+	fprintf(stderr, "tsc1: %ld.%09ld\n", tsc.tv_sec, tsc.tv_nsec);
+	fprintf(stderr, "tsc2 %ld.%09ld\n", tsc2.tv_sec, tsc2.tv_nsec);
+}
+#endif
+
 int main(int ac, char **av)
 {
 	unsigned long i;
         int numbers[2048];
         struct thread_data td = { 0 };
-
-        if (ac > 1)
-                run_mode = 0;
-        else
-                fprintf(stderr, "running default low IPC run\n");
+ 
+	// test_clock_gettime();
 
         for (i = 1; i < (unsigned long)ac; i++) {
                 char *str = av[i];
@@ -395,28 +420,27 @@ int main(int ac, char **av)
                         fprintf(stderr, "running high IPC test\n");
                         run_mode |= MODE_HIGH_IPC;
                 } else {
-                        fprintf(stderr, "usage: %s [low_ipc | high_ipc | rdstc[p]] [cmp] [notsc]\n", av[0]);
-                        fprintf(stderr, "\ttsc low_ipc cmp runs the low_ipc math comparing rdstcp with noop\n");
-                        fprintf(stderr, "\ttsc high_ipc runs the high IPC loop\n");
-                        fprintf(stderr, "\ttsc rdstcp only the rdtscp instruction\n");
-                        fprintf(stderr, "\tpassing notsc disables the tsc reads\n");
-                        fprintf(stderr, "\tpassing rdtsc uses rdtsc instead of rdtscp\n");
+                        fprintf(stderr, "usage: %s [ipc_mode] [cmp] [clock]\n", av[0]);
+                        fprintf(stderr, "\tvalid ipc modes are low_ipc and high_ipc\n");
+                        fprintf(stderr, "\tvalid clock modes are notsc, rdtscp, rdtsc, rdtsc_lfence, clock_gettime, clock_gettime_non_monotonic\n");
+                        fprintf(stderr, "\tcmp: compares the ipc mode with and without tsc reads\n");
                         exit(1);
                 }
         }
 
         /* default to low_ipc if nothing was specified */
-        if (!(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC | MODE_RDTSC |
-		MODE_RDTSC_LFENCE | MODE_RDTSCP | MODE_GETTIME | MODE_GETTIME_NON_MONOTONIC))) {
+        if (!(run_mode & (CLOCK_MODE_MASK | IPC_MODE_MASK))) {
                 run_mode |= MODE_LOW_IPC;
+		fprintf(stderr, "running default low IPC run\n");
         }
-	/* comparison mode needs to be low_ipc or high_ipc */
-	if ((run_mode & MODE_CMP) && !(run_mode & (MODE_LOW_IPC | MODE_HIGH_IPC))) {
-		run_mode |= MODE_LOW_IPC;
+
+	if ((run_mode & MODE_CMP) && !(run_mode & IPC_MODE_MASK)) {
+                run_mode |= MODE_LOW_IPC;
+		fprintf(stderr, "running default low IPC run\n");
 	}
 
         /* default to rdtscp if nothing was specified */
-        if (!(run_mode & (MODE_RDTSC | MODE_RDTSCP | MODE_RDTSC_LFENCE | MODE_GETTIME | MODE_GETTIME_NON_MONOTONIC))) {
+        if (!(run_mode & TSC_MODE_MASK)) {
                 run_mode |= MODE_RDTSCP;
         }
 
@@ -474,7 +498,7 @@ int main(int ac, char **av)
 
                         fprintf(stderr, "ratio %.2f\n", calls / skip_calls);
                 }
-        } else if (run_mode & (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | MODE_RDTSC_LFENCE | MODE_GETTIME_NON_MONOTONIC)) {
+        } else if (run_mode & CLOCK_MODE_MASK) {
                 run_for_secs(runtime, read_tsc_thread, &td);
         }
 }
