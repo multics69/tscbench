@@ -11,6 +11,9 @@
  * Example usage:
  *
  * tsc low_ipc -- the default, runs a low IPC loop with rdtscp
+ * tsc low_ipc factor=1000 -- runs a low IPC loop with rdtscp, but with a factor of 1000.
+ * 		this gives us IPC of ~1.2 instead of ~0.5
+ *
  * tsc low_ipc notsc -- runs a low IPC loop without rdtscp
  * tsc low_ipc rdtsc -- runs a low IPC loop with rdtsc
  * tsc low_ipc clock_gettime -- runs a low IPC loop with clock_gettime()
@@ -46,6 +49,7 @@ char *tsc_variant = "rdtscp";
 static volatile int skip_rdtsc = 0;
 static int runtime = 10;
 static int run_mode = 0;
+static int factor = 1;
 
 /*
  * example valid modes
@@ -204,7 +208,7 @@ static unsigned long low_ipc(unsigned long *loops)
                  * adjust this loop with more rounds in order to increase IPC
                  * the goal is around 0.5
                  */
-                for (k = 0; k < 2; k++) {
+                for (k = 0; k < 2 * factor; k++) {
                         global_matrix[dst] += global_matrix[(src + k) % matrix_size] +
                                 global_matrix[(dst + k) % matrix_size];
                 }
@@ -419,11 +423,15 @@ int main(int ac, char **av)
                 } else if (strcmp(str, "high_ipc") == 0) {
                         fprintf(stderr, "running high IPC test\n");
                         run_mode |= MODE_HIGH_IPC;
+                } else if (strncmp(str, "factor=", 7) == 0) {
+			factor = atoi(str + 7);
+			fprintf(stderr, "factor %d\n", factor);
                 } else {
-                        fprintf(stderr, "usage: %s [ipc_mode] [cmp] [clock]\n", av[0]);
+                        fprintf(stderr, "usage: %s [ipc_mode] [cmp] [clock] [factor=N]\n", av[0]);
                         fprintf(stderr, "\tvalid ipc modes are low_ipc and high_ipc\n");
                         fprintf(stderr, "\tvalid clock modes are notsc, rdtscp, rdtsc, rdtsc_lfence, clock_gettime, clock_gettime_non_monotonic\n");
                         fprintf(stderr, "\tcmp: compares the ipc mode with and without tsc reads\n");
+                        fprintf(stderr, "\tfactor=N: allows tuning the IPC of the low_ipc loop.  Higher factors result in higher IPC\n");
                         exit(1);
                 }
         }
