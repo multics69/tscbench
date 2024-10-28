@@ -200,8 +200,8 @@ static unsigned long low_ipc(unsigned long *loops)
                         dst = global_matrix[(dst + j) % matrix_size] % matrix_size;
                         if ((i * j) % 500 == 0) {
                                 val += read_tsc(&aux);
+				*loops += 1;
                         }
-                        *loops += 1;
                 }
 
                 /*
@@ -263,12 +263,6 @@ static void high_ipc(unsigned long *loops)
                 for (j = 0; j < high_ipc_matrix; j++) {
                         m3[i * high_ipc_matrix + j] = 0;
 
-                        /*
-                         * it doesn't matter much where we bump the loop
-                         * counter, just do it every so often
-                         */
-                        *loops += 1;
-
                         for (k = 0; k < high_ipc_matrix; k++) {
                                 m3[i * high_ipc_matrix + j] +=
                                         m1[i * high_ipc_matrix + k] *
@@ -276,6 +270,7 @@ static void high_ipc(unsigned long *loops)
                                 ops_count++;
                                 if (ops_count % 500 == 0) {
                                         read_tsc(&aux);
+					*loops += 1;
                                 }
                                 if (stopping)
                                         return;
