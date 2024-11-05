@@ -71,13 +71,14 @@ enum modes {
         MODE_RDTSCP = 1 << 4,
         MODE_RDTSC = 1 << 5,
 	MODE_RDTSC_LFENCE = 1 << 6,
-        MODE_GETTIME = 1 << 7,
-        MODE_GETTIME_NON_MONOTONIC = 1 << 8,
+	MODE_RDTSC_CAS = 1 << 7,
+        MODE_GETTIME = 1 << 8,
+        MODE_GETTIME_NON_MONOTONIC = 1 << 9,
 };
 
 #define IPC_MODE_MASK (MODE_LOW_IPC | MODE_HIGH_IPC)
 #define TSC_MODE_MASK (MODE_RDTSCP | MODE_RDTSC | MODE_GETTIME | \
-	MODE_NO_TSC | MODE_RDTSC_LFENCE | MODE_GETTIME_NON_MONOTONIC)
+	MODE_NO_TSC | MODE_RDTSC_LFENCE | MODE_RDTSC_CAS | MODE_GETTIME_NON_MONOTONIC)
 #define CLOCK_MODE_MASK (TSC_MODE_MASK & ~MODE_NO_TSC)
 
 /* use a smaller subset for high IPC tests */
@@ -147,6 +148,38 @@ static inline unsigned long rdtsc(unsigned int *aux)
 	return ((unsigned long)edx) << 32 | eax;
 }
 
+static inline unsigned long rdtsc_cas(unsigned int *aux)
+{
+	static unsigned long tsc;
+	unsigned long cur_tsc = tsc;
+	int being_updated = cur_tsc & 0x1;
+
+	if (!being_updated) {
+		unsigned long locked_tsc = cur_tsc | 0x1;
+		unsigned long cas_tsc = __sync_val_compare_and_swap(&tsc,
+						      cur_tsc, locked_tsc);
+
+		if (cas_tsc == cur_tsc) {
+			unsigned long new_tsc = rdtsc(aux) & ~0x1UL;
+			tsc = new_tsc;
+			return new_tsc;
+		}
+		else if (!(cas_tsc & 0x1)) {
+			return cas_tsc;
+		}
+	}
+
+	unsigned long cur_tsc2;
+	do {
+		cur_tsc2 = tsc;
+		if ((cur_tsc2 != cur_tsc) && !(cur_tsc2 & 0x1))
+			break;
+		cpu_relax();
+	} while (1);
+
+	return cur_tsc2;
+}
+
 static __attribute__((noinline)) unsigned long read_tsc(unsigned int *aux)
 {
         if (skip_rdtsc)
@@ -155,6 +188,8 @@ static __attribute__((noinline)) unsigned long read_tsc(unsigned int *aux)
                 return rdtscp(aux);
 	if (run_mode & MODE_RDTSC_LFENCE)
 		return rdtsc_lfence(aux);
+	if (run_mode & MODE_RDTSC_CAS)
+		return rdtsc_cas(aux);
         if (run_mode & MODE_GETTIME) {
                 struct timespec tsc;
 		int ret = clock_gettime(CLOCK_MONOTONIC, &tsc);
@@ -404,6 +439,10 @@ int main(int ac, char **av)
                         fprintf(stderr, "use lfence;rdtsc\n");
                         tsc_variant = "rdtsc_lfence";
 			run_mode |= MODE_RDTSC_LFENCE;
+                } else if (strcmp(str, "rdtsc_cas") == 0) {
+                        fprintf(stderr, "use cas;rdtsc\n");
+                        tsc_variant = "rdtsc_cas";
+			run_mode |= MODE_RDTSC_CAS;
                 } else if (strcmp(str, "clock_gettime_non_monotonic") == 0) {
                         fprintf(stderr, "use clock_gettime_non_monotonic\n");
                         tsc_variant = "clock_gettime_non_monotonic";
