@@ -45,11 +45,13 @@
 static unsigned long matrix_size = 64 * 1024 * 1024ULL;
 static unsigned long *global_matrix;
 static volatile unsigned long stopping = 0;
+static volatile unsigned long start_flag = 0;
 char *tsc_variant = "rdtscp";
 static volatile int skip_rdtsc = 0;
 static int runtime = 10;
 static int run_mode = 0;
 static int factor = 1;
+static int nthreads = 1;
 
 /*
  * example valid modes
@@ -174,7 +176,7 @@ static inline unsigned long rdtsc_cas(unsigned int *aux)
 		cur_tsc2 = tsc;
 		if ((cur_tsc2 != cur_tsc) && !(cur_tsc2 & 0x1))
 			break;
-		cpu_relax();
+		__asm__ __volatile__("rep; nop");
 	} while (1);
 
 	return cur_tsc2;
@@ -266,6 +268,9 @@ void *low_ipc_thread(void *arg)
 	struct timeval now;
 	struct timeval start;
 
+	/* wait for the start flag is turned on */
+	while (!start_flag) {;}
+
 	gettimeofday(&start, NULL);
 	while (!stopping) {
 		low_ipc(&loops);
@@ -327,6 +332,9 @@ void *high_ipc_thread(void *arg)
 	struct timeval now;
 	struct timeval start;
 
+	/* wait for the start flag is turned on */
+	while (!start_flag) {;}
+
 	gettimeofday(&start, NULL);
 	while (!stopping) {
 		high_ipc(&loops);
@@ -370,23 +378,44 @@ void *read_tsc_thread(void *arg)
         return NULL;
 }
 
+struct thr_td {
+        pthread_t thread;
+	struct thread_data td;
+};
+
 /*
  * makes a thread, sleeps for N seconds, sets stopping to 1, waits for completion
  */
 void run_for_secs(int secs, thread_func func, struct thread_data *td)
 {
-        pthread_t thread;
+	struct thr_td *thr_tds = calloc(nthreads, sizeof(*thr_tds));
         int ret;
 
-        stopping = 0;
-        ret = pthread_create(&thread, NULL, func, td);
-        if (ret) {
-                fprintf(stderr, "pthread_create failed: %d\n", ret);
+	if (!thr_tds) {
+                fprintf(stderr, "failed to allocate thr_td array\n");
                 exit(1);
-        }
+	}
+
+        stopping = 0;
+	for (int i = 0; i < nthreads; i++) {
+		thr_tds[i].td = *td;
+		ret = pthread_create(&thr_tds[i].thread, NULL, func, &thr_tds[i].td);
+		if (ret) {
+			fprintf(stderr, "pthread_create failed: %d\n", ret);
+			exit(1);
+		}
+	}
+
+	start_flag = 1;
         sleep(secs);
         stopping = 1;
-        pthread_join(thread, NULL);
+	start_flag = 0;
+	memset(td, 0, sizeof(*td));
+	for (int i = 0; i < nthreads; i++) {
+		pthread_join(thr_tds[i].thread, NULL);
+		td->calls_per_sec += thr_tds[i].td.calls_per_sec;
+	}
+	td->calls_per_sec /= nthreads;
 }
 
 #if 0
@@ -460,12 +489,16 @@ int main(int ac, char **av)
                 } else if (strncmp(str, "factor=", 7) == 0) {
 			factor = atoi(str + 7);
 			fprintf(stderr, "factor %d\n", factor);
+                } else if (strncmp(str, "nthreads=", 9) == 0) {
+			nthreads = atoi(str + 9);
+			fprintf(stderr, "nthreads %d\n", nthreads);
                 } else {
-                        fprintf(stderr, "usage: %s [ipc_mode] [cmp] [clock] [factor=N]\n", av[0]);
+                        fprintf(stderr, "usage: %s [ipc_mode] [cmp] [clock] [factor=N] [nthreads=N]\n", av[0]);
                         fprintf(stderr, "\tvalid ipc modes are low_ipc and high_ipc\n");
                         fprintf(stderr, "\tvalid clock modes are notsc, rdtscp, rdtsc, rdtsc_lfence, clock_gettime, clock_gettime_non_monotonic\n");
                         fprintf(stderr, "\tcmp: compares the ipc mode with and without tsc reads\n");
                         fprintf(stderr, "\tfactor=N: allows tuning the IPC of the low_ipc loop.  Higher factors result in higher IPC\n");
+                        fprintf(stderr, "\tnthreads=N: create N concurrent threads");
                         exit(1);
                 }
         }
